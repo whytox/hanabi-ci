@@ -7,6 +7,7 @@ import argparse
 from sys import stdout
 from game import Game
 from colorama import Fore
+from collections import Counter
 
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -45,6 +46,7 @@ class Action:
     PLAY = "PLAY"
 
 
+################### HANABI STATE ###################
 class HanabiState:
     def __init__(self, player: str, state_data: GameData.ServerGameStateData):
 
@@ -76,6 +78,7 @@ class HanabiState:
 
     def add_play(self, play_data: GameData.ServerPlayerMoveOk):
         self.play_history.append(play_data)
+        self.current_player = 
         return
 
     def add_error(self, error_data: GameData.ServerPlayerThunderStrike):
@@ -90,7 +93,8 @@ class HanabiState:
         storm_tokens = f"{self.storm_tokens}/3"
         return "\n".join([players_hands, note_tokens, storm_tokens])
 
-    def __player_hand(self, player: Player):
+    def __player_hand(self, player: Player) -> str:
+        """Return a string representation of the player hand"""
         card_str = []
         if player.name == self.player_name:
             for _, info in self.hand_info.items():
@@ -108,7 +112,36 @@ class HanabiState:
     def update_needed(self):
         return False
 
+    def valid_actions_type(self) -> list:
+        playable_actions = [Action.DISCARD, Action.PLAY]
+        if self.note_tokens < 8:
+            playable_actions.append(Action.HINT)
+        return playable_actions
 
+    def valid_hints(self, player_name: str, hint_type=None) -> list:
+        """Return the valid hints that can be given to player `player_name`
+        as a tuple (type, value, n_cards).
+        TODO: add remove_known param to filter out already known hints."""
+        possible_hints = list()
+        player = self.get_player(player_name)
+        if hint_type == "color":
+            card_info = lambda c: [c.color]
+        elif hint_type == "value":
+            card_info = lambda c: [c.value]
+        else:
+            card_info = lambda c: [c.value, c.color]
+        for c in player.hand:
+            possible_hints += card_info(c)
+        return Counter(possible_hints)
+
+    def get_player(self, player_name: str) -> Player:
+        for p in self.players_list:
+            if p.name == player_name:
+                return p
+        return None
+
+
+################### CLIENT ###################
 class Client:
     def __init__(self, name, host=HOST, port=PORT):
         self.playerName = name
@@ -296,10 +329,28 @@ class Client:
         return
 
     def __play_card(self, card: int):
-        if self.status == Status.IN_GAME:
-            play_req = GameData.ClientPlayerPlayCardRequest(self.playerName, card)
-            self.socket.send(play_req.serialize())
-        return
+        if self.status != Status.IN_GAME:
+            return
+        play_req = GameData.ClientPlayerPlayCardRequest(self.playerName, card)
+        self.socket.send(play_req.serialize())
+
+        # verify answer
+        s = self.socket
+        data = s.recv(DATASIZE)
+        data = GameData.GameData.deserialize(data)
+        if type(data) is GameData.ServerPlayerMoveOk:
+            logging.info(
+                f"{self.playerName} - correctly played card {card}: {data.card}"
+            )
+            self.game_state.add_play(data)
+            return True
+        if type(data) is GameData.ServerPlayerThunderStrike:
+            self.game_state.add_error(data)
+            return True
+        if type(data) is GameData.ServerActionInvalid:
+            logging.error(msg=f"{data.message}")
+            return False
+        return False
 
     def __give_hint(self, destination: str, hint_type: str, hint_value: str):
         if self.status == Status.IN_GAME:
