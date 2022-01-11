@@ -2,6 +2,7 @@ import os
 import GameData
 import socket
 from game import Game
+from game import Player
 import threading
 from constants import *
 import logging
@@ -21,10 +22,14 @@ statuses = [
 status = statuses[0]
 
 commandQueue = {}
-
+numPlayers = 2
+if len(sys.argv) > 1:
+    if int(sys.argv[1]) > 1:
+        numPlayers = int(sys.argv[1])
 
 def manageConnection(conn: socket, addr):
     global status
+    global game
     with conn:
         logging.info("Connected by: " + str(addr))
         keepActive = True
@@ -36,6 +41,9 @@ def manageConnection(conn: socket, addr):
                 del playerConnections[playerName]
                 logging.warning("Player disconnected: " + playerName)
                 game.removePlayer(playerName)
+                if len(playerConnections) == 0:
+                    logging.info("Shutting down server")
+                    os._exit(0)
                 keepActive = False
             else:
                 data = GameData.GameData.deserialize(data)    
@@ -54,7 +62,7 @@ def manageConnection(conn: socket, addr):
                             conn.send(GameData.ServerPlayerStartRequestAccepted(len(game.getPlayers()), game.getNumReadyPlayers()).serialize())
                         else:
                             return
-                        if len(game.getPlayers()) == game.getNumReadyPlayers() and len(game.getPlayers()) > 1:
+                        if len(game.getPlayers()) == game.getNumReadyPlayers() and len(game.getPlayers()) >= numPlayers:
                             listNames = []
                             for player in game.getPlayers():
                                 listNames.append(player.name)
@@ -90,7 +98,15 @@ def manageConnection(conn: socket, addr):
                         for id in playerConnections:
                             playerConnections[id][0].send(multipleData.serialize())
                             if game.isGameOver():
-                                os._exit(0)
+                                logging.info("Game over")
+                                logging.info("Game score: " + str(game.getScore()))
+                                #os._exit(0)
+                                players = game.getPlayers()
+                                game = Game()
+                                for player in players:
+                                    logging.info("Starting new game")
+                                    game.addPlayer(player.name)
+                                game.start()
             mutex.release()
 
 
