@@ -1,13 +1,12 @@
+from abc import ABC, abstractmethod
 import logging
 import socket
+from urllib import response
 import GameData
-from game import Player
 from constants import HOST, PORT, DATASIZE
 import argparse
 from sys import stdout
-from game import Game
-from colorama import Fore
-from collections import Counter
+from hanabi_model import HanabiAction, HanabiState
 
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -15,349 +14,256 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-CARD_COLORS = {
-    "yellow": Fore.YELLOW,
-    "blue": Fore.BLUE,
-    "green": Fore.GREEN,
-    "red": Fore.RED,
-    "white": Fore.WHITE,
-}
 
-
-def card_format(value: str, color: str) -> str:
-    num = "?" if value is None else str(value)
-    col = color
-    if col is not None:
-        return " ".join([CARD_COLORS[col], num, Fore.RESET])
-    else:
-        return num
-
-
-class Status:
+class ClientState:
     NOT_CONNECTED = "NOT CONNECTED"
     CONNECTED = "CONNECTED"
     LOBBY = "LOBBY"
     IN_GAME = "IN GAME"
-
-
-class Action:
-    DISCARD = "DISCARD"
-    HINT = "HINT"
-    PLAY = "PLAY"
-
-
-################### HANABI STATE ###################
-class HanabiState:
-    def __init__(self, player: str, state_data: GameData.ServerGameStateData):
-
-        self.player_name = player
-        self.current_player = state_data.currentPlayer
-        self.players_list = state_data.players
-        self.n_cards = 5 if len(self.players_list) <= 3 else 4
-        self.hand_info = {
-            c: {"color": None, "value": None} for c in range(self.n_cards)
-        }
-        self.note_tokens = state_data.usedNoteTokens
-        self.storm_tokens = state_data.usedStormTokens
-        self.table_cards = state_data.tableCards
-        self.discard_pile = state_data.discardPile
-        self.discard_history = list()
-        self.play_history = list()
-        self.error_history = list()
-        self.hint_history = list()
-        self.received_hints = list()
-        return
-
-    def add_hint(self, hint_data: GameData.ServerHintData):
-        self.hint_history.append(hint_data)
-        if hint_data.__delattr__() == self.player_name:
-            self.received_hints.append(hint_data)
-            for p in hint_data.positions:
-                self.hand_info[p][hint_data.type] = hint_data.value
-        return
-
-    def add_play(self, play_data: GameData.ServerPlayerMoveOk):
-        self.play_history.append(play_data)
-        self.current_player = 
-        return
-
-    def add_error(self, error_data: GameData.ServerPlayerThunderStrike):
-        self.error_history.append(error_data)
-        return
-
-    def __str__(self):
-        players_hands = "\n".join(
-            [self.__player_hand(player) for player in self.players_list]
-        )
-        note_tokens = f"{self.note_tokens}/8"
-        storm_tokens = f"{self.storm_tokens}/3"
-        return "\n".join([players_hands, note_tokens, storm_tokens])
-
-    def __player_hand(self, player: Player) -> str:
-        """Return a string representation of the player hand"""
-        card_str = []
-        if player.name == self.player_name:
-            for _, info in self.hand_info.items():
-                s = card_format(info["value"], info["color"])
-                card_str.append(s)
-        else:
-            for card in player.hand:
-                s = card_format(card.value, card.color)
-                card_str.append(s)
-        return f"{player.name}: {' '.join(card_str)}"
-
-    def is_my_turn(self):
-        return self.current_player == self.player_name
-
-    def update_needed(self):
-        return False
-
-    def valid_actions_type(self) -> list:
-        playable_actions = [Action.DISCARD, Action.PLAY]
-        if self.note_tokens < 8:
-            playable_actions.append(Action.HINT)
-        return playable_actions
-
-    def valid_hints(self, player_name: str, hint_type=None) -> list:
-        """Return the valid hints that can be given to player `player_name`
-        as a tuple (type, value, n_cards).
-        TODO: add remove_known param to filter out already known hints."""
-        possible_hints = list()
-        player = self.get_player(player_name)
-        if hint_type == "color":
-            card_info = lambda c: [c.color]
-        elif hint_type == "value":
-            card_info = lambda c: [c.value]
-        else:
-            card_info = lambda c: [c.value, c.color]
-        for c in player.hand:
-            possible_hints += card_info(c)
-        return Counter(possible_hints)
-
-    def get_player(self, player_name: str) -> Player:
-        for p in self.players_list:
-            if p.name == player_name:
-                return p
-        return None
+    GAME_OVER = "GAME OVER"
 
 
 ################### CLIENT ###################
-class Client:
+class Client(ABC):
+    """A class encapsulating some methods to comunicate with the server."""
+
     def __init__(self, name, host=HOST, port=PORT):
-        self.playerName = name
+        self.player_name = name
         self.host = host
         self.port = port
         self.socket = None
-        self.status = Status.NOT_CONNECTED
-        self.game_state = None
-        self.must_update_state = True
-        self.running = False
-        self.__init_connection()
+        self.state = ClientState.NOT_CONNECTED
+        self.current_player = None
+        # self.player_order = None
+        self.__connect()
 
-    def __init_connection(self):
+    def __connect(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((self.host, self.port))
-        connection_request = GameData.ClientPlayerAddData(self.playerName)
-        self.socket.send(connection_request.serialize())
-        data = self.socket.recv(DATASIZE)
-        data = GameData.GameData.deserialize(data)
-        if type(data) is GameData.ServerPlayerConnectionOk:
-            self.status = Status.CONNECTED
+        connection_request = GameData.ClientPlayerAddData(self.player_name)
+        self.__send_request(connection_request)
+        response = self.__read_response()
+        if self.__response_of_type(response, GameData.ServerPlayerConnectionOk):
+            self.state = ClientState.CONNECTED
             logging.info(
-                f"Connection accepted by the server. Welcome {self.playerName}"
+                f"Connection accepted by the server. Welcome {self.player_name}"
             )
         else:
             raise ConnectionError("There was an error while connecting to the server.")
         return
 
-    def send_ready(self):
-        if self.status != Status.CONNECTED:
+    def __read_response(self) -> GameData.ServerToClientData:
+        """Read the next server response."""
+        data = self.socket.recv(DATASIZE)
+        response = GameData.GameData.deserialize(data)
+        return response
+
+    def __response_of_type(
+        self, response: GameData.ServerToClientData, response_class
+    ) -> bool:
+        """Return True if the given response is of the specified type.
+        Probably useless..."""
+        if type(response) is response_class:
+            return True
+        return False
+
+    def __send_request(self, request: GameData.ClientToServerData):
+        """Send the specified request to the server."""
+        self.socket.send(request.serialize())
+        print("request sent")
+        return
+
+    # def __send_ready(self):
+    #     """Send a ready request to the server."""
+    #     request = GameData.ClientPlayerReadyData(self.player_name)
+    #     self.__send_request(request)
+    #     return
+
+    # def __send_start(self):
+    #     """Send a start request to the server."""
+    #     request = GameData.ClientPlayerStartRequest(self.player_name)
+    #     self.__send_request(request)
+    #     return
+
+    def __send_status(self):
+        """Send a status request to the server"""
+        request = GameData.ClientGetGameStateRequest(self.player_name)
+        self.__send_request(request)
+        return
+
+    def __send_action(self, action):
+        pass
+
+    # TODO: refactor to `ready``
+    def send_start(self):
+        if self.state != ClientState.CONNECTED:
             print("You must be connected")
             return
 
-        ready_request = GameData.ClientPlayerStartRequest(self.playerName)
-        self.socket.send(ready_request.serialize())
-        data = self.socket.recv(DATASIZE)
-        data = GameData.GameData.deserialize(data)
-        if type(data) is GameData.ServerPlayerStartRequestAccepted:
-            self.status = Status.LOBBY
+        start_request = GameData.ClientPlayerStartRequest(self.player_name)
+        self.__send_request(start_request)
+        response = self.__read_response()
+        if self.__response_of_type(response, GameData.ServerPlayerStartRequestAccepted):
+            self.state = ClientState.LOBBY
             logging.info(
-                msg=f"{self.playerName} - Ready: {data.acceptedStartRequests}/{data.connectedPlayers}"
+                msg=f"{self.player_name} - Ready: {response.acceptedStartRequests}/{response.connectedPlayers}"
             )
+        else:
+            raise ConnectionError("Invalid response received on Start request.")
         return
 
+    # TODO: refactor to `start`
+    # TODO: make this code more readable
     def wait_start(self):
-        if self.status != Status.LOBBY:
+        if self.state != ClientState.LOBBY:
             print("You have to be in the lobby")
             return
         # read until it's a ServerStart
-        while self.status != Status.IN_GAME:
-            data = self.socket.recv(DATASIZE)
-            data = GameData.GameData.deserialize(data)
-            if type(data) is GameData.ServerStartGameData:
-                confirm = GameData.ClientPlayerReadyData(self.playerName)
-                self.socket.send(confirm.serialize())
-                logging.debug(msg="{self.playerName} - ready request sent")
-                self.status = Status.IN_GAME
-                logging.info(msg=f"{self.playerName} - Game started")
-                self.__init_game_state()
-                logging.info(msg=f"{self.playerName} - State:\n{self.game_state}")
-            logging.debug(msg=f"response received: {data} of type {type(data)}")
+        while self.state != ClientState.IN_GAME:
+            response = self.__read_response()
+            if self.__response_of_type(response, GameData.ServerStartGameData):
+                ready_request = GameData.ClientPlayerReadyData(self.player_name)
+                self.__send_request(ready_request)
+                self.state = ClientState.IN_GAME
+
+                state = self.fetch_state()
+                self._init_game_state(state)
+
+                logging.debug(msg="{self.player_name} - ready request sent")
+                logging.info(msg=f"{self.player_name} - Game started")
+                logging.info(msg=f"{self.player_name}")
+            logging.debug(msg=f"response received: {response} of type {type(response)}")
         return True
 
-    def __init_game_state(self):
-        logging.info(f"{self.playerName} - sending status request")
-        if self.game_state is None:
-            state_data = self.fetch_state()
-            self.game_state = HanabiState(self.playerName, state_data)
-        else:
-            logging.error(msg="Games state is already initialized.")
+    # TODO: must be updated to be passed to the Agent
+    # that it creates an HanabiState
+    # HanabiState.from_game_data(Server)
+    @abstractmethod
+    def _init_game_state(self, state: GameData.ServerGameStateData):
+        print("client state init")
+        self.current_player = state.currentPlayer
+        # self.player_order = state.players
         return
 
     def run(self):
-        if self.status != Status.IN_GAME:
+        if self.state != ClientState.IN_GAME:
             return
         s = self.socket
-        self.running = True
-        logging.info(self.game_state)
-        while self.running:
-            if self.game_state.is_my_turn():
-                self.play()
-            if self.game_state.update_needed():
-                self.update_state()
-            data = s.recv(DATASIZE)
-            if not data:
-                continue
-            data = GameData.GameData.deserialize(data)
-            if type(data) is GameData.ServerGameStateData:
-                dataOk = True
-                print("Current player: " + data.currentPlayer)
-                print("Player hands: ")
-                for p in data.players:
-                    print(p.toClientString())
-                print("Table cards: ")
-                for pos in data.tableCards:
-                    print(pos + ": [ ")
-                    for c in data.tableCards[pos]:
-                        print(c.toClientString() + " ")
-                    print("]")
-                print("Discard pile: ")
-                for c in data.discardPile:
-                    print("\t" + c.toClientString())
-                print("Note tokens used: " + str(data.usedNoteTokens) + "/8")
-                print("Storm tokens used: " + str(data.usedStormTokens) + "/3")
-            if type(data) is GameData.ServerActionInvalid:
-                dataOk = True
-                print("Invalid action performed. Reason:")
-                print(data.message)
-            if type(data) is GameData.ServerActionValid:
-                dataOk = True
-                print("Action valid!")
-                print("Current player: " + data.player)
-            if type(data) is GameData.ServerPlayerMoveOk:
-                dataOk = True
-                print("Nice move!")
-                print("Current player: " + data.player)
-            if type(data) is GameData.ServerPlayerThunderStrike:
-                dataOk = True
-                print("OH NO! The Gods are unhappy with you!")
-            if type(data) is GameData.ServerHintData:
-                dataOk = True
-                print("Hint type: " + data.type)
-                print(
-                    "Player "
-                    + data.destination
-                    + " cards with value "
-                    + str(data.value)
-                    + " are:"
-                )
-                for i in data.positions:
-                    print("\t" + str(i))
-            if type(data) is GameData.ServerInvalidDataReceived:
-                dataOk = True
-                print(data.data)
-            if type(data) is GameData.ServerGameOver:
-                dataOk = True
-                logging.info(msg=data.message)
-                logging.info(msg=data.score)
-                logging.info(msg=data.scoreMessage)
-                stdout.flush()
-                run = False
-            if not dataOk:
-                logging.error(
-                    mesg="Unknown or unimplemented data type: " + str(type(data))
-                )
-            # print("[" + self.playerName + " - " + self.status + "]: ", end="")
+        while self.state == ClientState.IN_GAME:
+            print(self.current_player)
+            if self.current_player == self.player_name:
+                action = self.get_action_to_be_played()  # implemented by agent subclass
+                self.__play_action(action)
+            else:
+                action, new_state = self.fetch_action_result()
+                print("TEST1")
+                self.update_state_with_action(action, new_state)
+            # TODO: check for game over
             stdout.flush()
         return
 
-    def fetch_state(self) -> GameData.ServerGameStateData:
-        if self.status != Status.IN_GAME:
-            print("You must be in game")
-            return
-        state_request = GameData.ClientGetGameStateRequest(self.playerName)
-        self.socket.send(state_request.serialize())
-        data = self.socket.recv(DATASIZE)
-        data = GameData.GameData.deserialize(data)
-        if type(data) is GameData.ServerGameStateData:
-            return data
-        return None
+    @abstractmethod
+    def get_action_to_be_played(self):
+        """Return the action to be played.
+        Implemented by the agent subclass."""
+        raise NotImplementedError
 
-    # def __update_state(self, data: GameData.ServerGameStateData):
-    #     raise NotImplementedError("abstract method")
-
-    def play_action(self, action: dict):
-        if action["type"] == Action.DISCARD:
-            card = action["card"]
-            self.__discard_card(card)
-        elif action["type"] == Action.PLAY:
-            card = action["card"]
-            self.__play_card(card)
-        elif action["type"] == Action.HINT:
-            destination = action["destination"]
-            hint_type = action["hint_type"]
-            hint_value = action["hint_value"]
-            self.__give_hint(destination, hint_type, hint_value)
-        else:
-            raise ValueError("Invalid action specified")
-        return
+    def __play_action(self, action: HanabiAction):
+        if action.action_type == HanabiAction.PLAY:
+            return self.__play_card(action.card_index)
+        elif action.action_type == HanabiAction.DISCARD:
+            return self.__discard_card(action.card_index)
+        elif action.action_type == HanabiAction.HINT:
+            return self.__give_hint(action.dest, action.hint_type, action.hint_value)
+        raise TypeError("Inappropriate action type.")
 
     def __discard_card(self, card: int):
-        if self.status == Status.IN_GAME:
+        """Send the appropriate request to play the given card."""
+        if self.state == ClientState.IN_GAME:
             discard_req = GameData.ClientPlayerDiscardCardRequest(self.playerName, card)
-            self.socket.send(discard_req.serialize())
+            self.__send_request(discard_req)
         return
 
     def __play_card(self, card: int):
-        if self.status != Status.IN_GAME:
+        if self.state != ClientState.IN_GAME:
             return
         play_req = GameData.ClientPlayerPlayCardRequest(self.playerName, card)
-        self.socket.send(play_req.serialize())
+        self.__send_request(play_req)
 
         # verify answer
-        s = self.socket
-        data = s.recv(DATASIZE)
-        data = GameData.GameData.deserialize(data)
-        if type(data) is GameData.ServerPlayerMoveOk:
+        response = self.__read_response()
+        if self.__response_of_type(response, GameData.ServerPlayerMoveOk):
             logging.info(
-                f"{self.playerName} - correctly played card {card}: {data.card}"
+                f"{self.playerName} - correctly played card {card}: {response.card}"
             )
-            self.game_state.add_play(data)
+            self.game_state.add_play(response)
             return True
-        if type(data) is GameData.ServerPlayerThunderStrike:
-            self.game_state.add_error(data)
+        elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
+            self.game_state.add_error(response)
             return True
-        if type(data) is GameData.ServerActionInvalid:
-            logging.error(msg=f"{data.message}")
+        elif self.__response_of_type(response, GameData.ServerActionInvalid):
             return False
         return False
 
     def __give_hint(self, destination: str, hint_type: str, hint_value: str):
-        if self.status == Status.IN_GAME:
+        if self.state == ClientState.IN_GAME:
             hint_req = GameData.ClientHintData(
                 self.playerName, destination, hint_type, hint_value
             )
-            self.socket.send(hint_req.serialize())
+            self.__send_request(hint_req)
+        return
+
+    def fetch_action_result(self) -> tuple:
+        """Return a tuple (HanabiAction, GameData.ServerGameStateData)
+        The first element is the action performed.
+        The second element is the new game state after the move has been played.
+        # when a player perform an action the server will:
+        # - send ServerInvalidAction or ServerInvalidData
+        #  if the action/data is not valid, but only to the current user
+        # (for all kind of moves)
+        # - hint: send ServerHintData
+        # - discard: send ServerActionValid
+        #   requires a state fetch
+        # - play: send either ServerPlayerThunderStrike, ServerPlayerMoveOk
+        #   requires a state fetch
+        """
+        response = self.__read_response()
+        if self.__response_of_type(response, GameData.ServerHintData):
+            # an hint has been sent :^O
+            action = HanabiAction.from_hint_data(response)
+        elif self.__response_of_type(response, GameData.ServerActionValid):
+            # a discard has been performed :^)
+            action = HanabiAction.from_action_valid(response)
+        elif self.__response_of_type(response, GameData.ServerPlayerMoveOk):
+            # a card has been successfully played :^D
+            action = HanabiAction.from_good_move(response)
+            pass
+        elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
+            # a card has been unsuccessfully played :^@
+            action = HanabiAction.from_thunder_strike(response)
+        else:
+            raise ValueError("Unexpected response received.")
+        new_state = self.fetch_state()
+        return (action, new_state)
+
+    def fetch_state(self) -> GameData.ServerGameStateData:
+        """Send a ClientGetGameStateRequest and return the
+        received ServerGameStateData."""
+        if self.state != ClientState.IN_GAME:
+            print("You must be in game")
+            return
+        self.__send_status()
+        response = self.__read_response()
+        if self.__response_of_type(response, GameData.ServerGameStateData):
+            return response
+        raise ValueError("Invalid state received.")
+
+    @abstractmethod
+    def update_state_with_action(
+        self, action: HanabiAction, new_state: GameData.ServerGameStateData
+    ):
+        """Update current player"""
+        self.current_player = new_state.currentPlayer
         return
 
 
