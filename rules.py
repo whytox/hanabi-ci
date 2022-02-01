@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from hanabi_model import HanabiState, HanabiAction
+from hanabi_model import HanabiState, HanabiAction, Hint, Play, Discard
 from itertools import product
+import random
 
 
 class Rule(ABC):
@@ -10,7 +11,7 @@ class Rule(ABC):
         raise NotImplementedError
 
 
-class TestHint(Rule):
+class RandomHint(Rule):
     """A rule that just give an hint to an
     already not hinted card of the minimum
     number value.
@@ -18,13 +19,35 @@ class TestHint(Rule):
     """
 
     @staticmethod
-    @abstractmethod
     def match(hanabi_state: HanabiState) -> HanabiAction:
-        players = hanabi_state.players_list
-        for p in players[1:]:
-            print(p.hand)
-            print(p.received_hints)
-            print(p.)
+        if hanabi_state.used_note_tokens == 8:
+            return None
+        _from = hanabi_state.me.name
+
+        hint_type = Hint.HINT_TYPE_VAL
+        next_player_turn = (hanabi_state.my_turn + 1) % len(hanabi_state.players_list)
+        to = hanabi_state.players_list[next_player_turn].name  # to next player
+        print(to)
+        print(hanabi_state.players_list[next_player_turn].hand)
+        hint_value = random.choice(
+            hanabi_state.players_list[next_player_turn].hand
+        ).value
+        print(f"hint  for {to} from {_from}")
+        return Hint(_from, to, hint_type, hint_value)
+
+
+class PlayRandomCard(Rule):
+    def match(hanabi_state: HanabiState) -> HanabiAction:
+        card_index = random.choice(range(hanabi_state.n_cards))
+        sender = hanabi_state.me.name
+        return Play(sender, card_index)
+
+
+class DiscardRandomCard(Rule):
+    def match(hanabi_state: HanabiState) -> HanabiAction:
+        card_index = random.choice(range(hanabi_state.n_cards))
+        sender = hanabi_state.me
+        return Discard(sender, card_index)
 
 
 class PlaySafeCard(Rule):

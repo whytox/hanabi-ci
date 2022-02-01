@@ -6,7 +6,7 @@ import GameData
 from constants import HOST, PORT, DATASIZE
 import argparse
 from sys import stdout
-from hanabi_model import HanabiAction, HanabiState
+from hanabi_model import HanabiAction, HanabiState, Play, Discard, Hint
 
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -91,10 +91,6 @@ class Client(ABC):
         self.__send_request(request)
         return
 
-    def __send_action(self, action):
-        pass
-
-    # TODO: refactor to `ready``
     def send_start(self):
         if self.state != ClientState.CONNECTED:
             print("You must be connected")
@@ -112,8 +108,6 @@ class Client(ABC):
             raise ConnectionError("Invalid response received on Start request.")
         return
 
-    # TODO: refactor to `start`
-    # TODO: make this code more readable
     def wait_start(self):
         if self.state != ClientState.LOBBY:
             print("You have to be in the lobby")
@@ -150,10 +144,11 @@ class Client(ABC):
             return
         s = self.socket
         while self.state == ClientState.IN_GAME:
-            print(self.current_player)
+            print(self.player_name, self.current_player)
             if self.current_player == self.player_name:
                 action = self.get_action_to_be_played()  # implemented by agent subclass
-                self.__play_action(action)
+                action_result, new_state = self.__play_action(action)
+                self.update_state_with_action(action_result, new_state)
             else:
                 action, new_state = self.fetch_action_result()
                 print("TEST1")
@@ -169,46 +164,55 @@ class Client(ABC):
         raise NotImplementedError
 
     def __play_action(self, action: HanabiAction):
-        if action.action_type == HanabiAction.PLAY:
-            return self.__play_card(action.card_index)
-        elif action.action_type == HanabiAction.DISCARD:
-            return self.__discard_card(action.card_index)
-        elif action.action_type == HanabiAction.HINT:
-            return self.__give_hint(action.dest, action.hint_type, action.hint_value)
-        raise TypeError("Inappropriate action type.")
+        if type(action) is Play:
+            self.__play_card(action)
+        elif type(action) is Discard:
+            self.__discard_card(action)
+        elif type(action) is Hint:
+            self.__give_hint(action)
+        else:
+            raise TypeError("Inappropriate action type.")
+        # check server response:
+        action_result, new_state = self.fetch_action_result()
+        return action_result, new_state
 
-    def __discard_card(self, card: int):
+    def __discard_card(self, discard: Discard):
         """Send the appropriate request to play the given card."""
         if self.state == ClientState.IN_GAME:
-            discard_req = GameData.ClientPlayerDiscardCardRequest(self.playerName, card)
+            discard_req = GameData.ClientPlayerDiscardCardRequest(
+                self.playerName, discard.card_index
+            )
             self.__send_request(discard_req)
         return
 
-    def __play_card(self, card: int):
+    def __play_card(self, play: Play):
         if self.state != ClientState.IN_GAME:
             return
-        play_req = GameData.ClientPlayerPlayCardRequest(self.playerName, card)
+        play_req = GameData.ClientPlayerPlayCardRequest(
+            self.player_name, play.card_index
+        )
         self.__send_request(play_req)
 
         # verify answer
-        response = self.__read_response()
-        if self.__response_of_type(response, GameData.ServerPlayerMoveOk):
-            logging.info(
-                f"{self.playerName} - correctly played card {card}: {response.card}"
-            )
-            self.game_state.add_play(response)
-            return True
-        elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
-            self.game_state.add_error(response)
-            return True
-        elif self.__response_of_type(response, GameData.ServerActionInvalid):
-            return False
-        return False
+        # response = self.__read_response()
+        # if self.__response_of_type(response, GameData.ServerPlayerMoveOk):
+        #     logging.info(
+        #         f"{self.playerName} - correctly played card {card}: {response.card}"
+        #     )
+        #     self.game_state.add_play(response)
+        #     return True
+        # elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
+        #     self.game_state.add_error(response)
+        #     return True
+        # elif self.__response_of_type(response, GameData.ServerActionInvalid):
+        #     return False
+        # return False
+        return
 
-    def __give_hint(self, destination: str, hint_type: str, hint_value: str):
+    def __give_hint(self, hint: Hint):
         if self.state == ClientState.IN_GAME:
             hint_req = GameData.ClientHintData(
-                self.playerName, destination, hint_type, hint_value
+                self.player_name, hint.to, hint._type, hint.value
             )
             self.__send_request(hint_req)
         return
@@ -230,21 +234,22 @@ class Client(ABC):
         response = self.__read_response()
         if self.__response_of_type(response, GameData.ServerHintData):
             # an hint has been sent :^O
-            action = HanabiAction.from_hint_data(response)
+            played_action = Hint.from_hint_data(response)
         elif self.__response_of_type(response, GameData.ServerActionValid):
             # a discard has been performed :^)
-            action = HanabiAction.from_action_valid(response)
+            played_action = Discard.from_action_valid(response)
         elif self.__response_of_type(response, GameData.ServerPlayerMoveOk):
             # a card has been successfully played :^D
-            action = HanabiAction.from_good_move(response)
-            pass
+            played_action = Play.from_good_move(response)
         elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
             # a card has been unsuccessfully played :^@
-            action = HanabiAction.from_thunder_strike(response)
+            played_action = Play.from_thunder_strike(response)
         else:
-            raise ValueError("Unexpected response received.")
+            raise ValueError(
+                f"Unexpected response received: {self.player_name}, {response.message}"
+            )
         new_state = self.fetch_state()
-        return (action, new_state)
+        return (played_action, new_state)
 
     def fetch_state(self) -> GameData.ServerGameStateData:
         """Send a ClientGetGameStateRequest and return the
@@ -260,7 +265,9 @@ class Client(ABC):
 
     @abstractmethod
     def update_state_with_action(
-        self, action: HanabiAction, new_state: GameData.ServerGameStateData
+        self,
+        played_action: GameData.ServerToClientData,
+        new_state: GameData.ServerGameStateData,
     ):
         """Update current player"""
         self.current_player = new_state.currentPlayer
