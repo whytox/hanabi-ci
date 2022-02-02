@@ -46,6 +46,13 @@ class PlayRandomCard(Rule):
 class DiscardRandomCard(Rule):
     def match(hanabi_state: HanabiState) -> HanabiAction:
         card_index = random.choice(range(hanabi_state.n_cards))
+        sender = hanabi_state.me.name
+        return Discard(sender, card_index)
+
+
+class DiscardRandomCard(Rule):
+    def match(hanabi_state: HanabiState) -> HanabiAction:
+        card_index = random.choice(range(hanabi_state.n_cards))
         sender = hanabi_state.me
         return Discard(sender, card_index)
 
