@@ -1,13 +1,11 @@
 from abc import ABC
-
-
 import GameData
 from game import Player, Card
 from itertools import product
 
 import logging
 
-from hanabi_view import CARD_COLORS
+from hanabi_view import player_hand
 
 logging.basicConfig(format="%(message)s", level=logging.DEBUG)
 
@@ -53,13 +51,18 @@ class Play(HanabiAction):
         self.result = result
         return
 
-    @staticmethod
-    def from_thunder_strike(data: GameData.ServerPlayerThunderStrike):
-        sender = data.sender
-        card_index = data.cardHandIndex
-        real_card = data.card
-        result = Play.THUNDERSTRIKE
-        return Play(sender, card_index, real_card, result)
+    def __str__(self) -> str:
+        _str = f"{self.sender} plays cards at index {self.card_index}"
+        if self.real_card is not None:
+            _str += f" which is {self.real_card}"
+        if self.card_drawn is not None:
+            _str += f" and drawn {self.card_drawn}"
+        if self.result is not None:
+            _str += f"\nResult: {self.result}"
+        return _str
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 class Discard(HanabiAction):
@@ -136,10 +139,9 @@ class UnknownCard:
         self.received_hints = list()
         self.not_received_hints = list()
 
+    # TODO: merge the two following methods in a single one
     def add_positive_knowledge(self, hint: Hint):
         """This method register that the card is covered by the hint."""
-        # TODO: implement hint reception
-        # TODO: remove invalid possible cards after the hint
         # remove cards not corresponding to given hint
         self.received_hints.append(hint)
         not_possible_cards = set()
@@ -148,7 +150,6 @@ class UnknownCard:
                 not_possible_cards.add(c)
         # remove the set of non possible cards from the set of possible cards
         self.possible_cards = self.possible_cards.difference(not_possible_cards)
-        print(self.possible_cards)
         return
 
     def add_negative_knowledge(self, hint: Hint):
@@ -159,7 +160,6 @@ class UnknownCard:
             if hint.covers(c):
                 not_possible_cards.add(c)
         self.possible_cards = self.possible_cards.difference(not_possible_cards)
-        print(self.possible_cards)
         return
 
     @staticmethod
@@ -172,6 +172,12 @@ class UnknownCard:
                 card_set.add(Card(card_id, num, color))
                 card_id += 1
         return card_set
+
+    def __str__(self):
+        return "?"
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 ################### HANABI STATE ###################
@@ -240,26 +246,32 @@ class HanabiState:
 
     def on_hint(self, hint: Hint):
         if hint.to == self.me.name:
-            print(f"{self.me.name} received an hint from {hint._from}")
+            logging.debug(f"{self.me.name} received an hint from {hint._from}")
             self.inference.add_hint(hint)
         else:
             # TODO: add hint to hint list
-            print(f"{hint._from} sent an hint to {hint.to}")
+            logging.debug(f"{hint._from} sent an hint to {hint.to}")
         return
 
     def on_play(self, play: Play):
         logging.debug(f"card drawn: {play.card_drawn}")
         # TODO: self.inference.add_visible_card(play.card_drawn)
-        pass
+        # self.inference.update_visible_cards()
+        return
 
     def on_discard(self, discard: Discard):
         # TODO: update state on discard's result
-        pass
+        # self.inference.update_visible_cards()
+        logging.debug(
+            f"{discard.sender} discarded the card {discard.card_discarded} at index {discard.card_index} and drawn {discard.card_drawn}"
+        )
+        return
 
     def __str__(self):
         note_tokens = f"{self.used_note_tokens}/8"
         storm_tokens = f"{self.used_storm_tokens}/3"
-        return "\n".join([str(self.players_list), note_tokens, storm_tokens])
+        player_data = [f"{p.name}: {p.hand}" for p in self.players_list]
+        return "\n".join([*player_data, note_tokens, storm_tokens])
 
     # def valid_hints(self, player_name: str, hint_type=None) -> list:
     #     """Return the valid hints that can be given to player `player_name`

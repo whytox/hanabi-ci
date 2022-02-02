@@ -274,7 +274,7 @@ class Client(ABC):
             real_card = data.card
             card_drawn = self.get_new_sender_card(sender, new_state, card_index)
             result = Play.THUNDERSTRIKE
-            return Play(sender, card_index, real_card, result)
+            return Play(sender, card_index, real_card, card_drawn, result)
         return None
 
     def get_new_sender_card(
