@@ -1,12 +1,10 @@
 from abc import ABC, abstractmethod
 import logging
 import socket
-from urllib import response
 import GameData
 from constants import HOST, PORT, DATASIZE
-import argparse
 from sys import stdout
-from hanabi_model import HanabiAction, HanabiState, Play, Discard, Hint
+from hanabi_model import HanabiAction, Play, Discard, Hint, UnknownCard
 
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -70,20 +68,7 @@ class Client(ABC):
     def __send_request(self, request: GameData.ClientToServerData):
         """Send the specified request to the server."""
         self.socket.send(request.serialize())
-        print("request sent")
         return
-
-    # def __send_ready(self):
-    #     """Send a ready request to the server."""
-    #     request = GameData.ClientPlayerReadyData(self.player_name)
-    #     self.__send_request(request)
-    #     return
-
-    # def __send_start(self):
-    #     """Send a start request to the server."""
-    #     request = GameData.ClientPlayerStartRequest(self.player_name)
-    #     self.__send_request(request)
-    #     return
 
     def __send_status(self):
         """Send a status request to the server"""
@@ -129,9 +114,6 @@ class Client(ABC):
             logging.debug(msg=f"response received: {response} of type {type(response)}")
         return True
 
-    # TODO: must be updated to be passed to the Agent
-    # that it creates an HanabiState
-    # HanabiState.from_game_data(Server)
     @abstractmethod
     def _init_game_state(self, state: GameData.ServerGameStateData):
         print("client state init")
@@ -151,7 +133,6 @@ class Client(ABC):
                 self.update_state_with_action(action_result, new_state)
             else:
                 action, new_state = self.fetch_action_result()
-                print("TEST1")
                 self.update_state_with_action(action, new_state)
             # TODO: check for game over
             stdout.flush()
@@ -180,7 +161,7 @@ class Client(ABC):
         """Send the appropriate request to play the given card."""
         if self.state == ClientState.IN_GAME:
             discard_req = GameData.ClientPlayerDiscardCardRequest(
-                self.playerName, discard.card_index
+                self.player_name, discard.card_index
             )
             self.__send_request(discard_req)
         return
@@ -192,21 +173,6 @@ class Client(ABC):
             self.player_name, play.card_index
         )
         self.__send_request(play_req)
-
-        # verify answer
-        # response = self.__read_response()
-        # if self.__response_of_type(response, GameData.ServerPlayerMoveOk):
-        #     logging.info(
-        #         f"{self.playerName} - correctly played card {card}: {response.card}"
-        #     )
-        #     self.game_state.add_play(response)
-        #     return True
-        # elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
-        #     self.game_state.add_error(response)
-        #     return True
-        # elif self.__response_of_type(response, GameData.ServerActionInvalid):
-        #     return False
-        # return False
         return
 
     def __give_hint(self, hint: Hint):
@@ -232,23 +198,19 @@ class Client(ABC):
         #   requires a state fetch
         """
         response = self.__read_response()
-        if self.__response_of_type(response, GameData.ServerHintData):
-            # an hint has been sent :^O
-            played_action = Hint.from_hint_data(response)
-        elif self.__response_of_type(response, GameData.ServerActionValid):
-            # a discard has been performed :^)
-            played_action = Discard.from_action_valid(response)
-        elif self.__response_of_type(response, GameData.ServerPlayerMoveOk):
-            # a card has been successfully played :^D
-            played_action = Play.from_good_move(response)
-        elif self.__response_of_type(response, GameData.ServerPlayerThunderStrike):
-            # a card has been unsuccessfully played :^@
-            played_action = Play.from_thunder_strike(response)
-        else:
-            raise ValueError(
-                f"Unexpected response received: {self.player_name}, {response.message}"
-            )
+
+        if self.__response_of_type(response, GameData.ServerActionInvalid):
+            raise ValueError(f"ActionInvalid received: {response.message}")
+        elif self.__response_of_type(response, GameData.ServerInvalidDataReceived):
+            raise ValueError(f"InvalidData received: {response.data}")
+        elif type(response) is GameData.ServerGameOver:
+            logging.info("The game is over.")
+            self.state = ClientState.GAME_OVER
+            return None, None
+
+        # check new state to get info about the new drawn cards
         new_state = self.fetch_state()
+        played_action = self.build_action_from_server_response(response, new_state)
         return (played_action, new_state)
 
     def fetch_state(self) -> GameData.ServerGameStateData:
@@ -273,14 +235,54 @@ class Client(ABC):
         self.current_player = new_state.currentPlayer
         return
 
+    def build_action_from_server_response(
+        self, data: GameData.ServerToClientData, new_state: GameData.ServerToClientData
+    ):
+        """Create an Hanabi action from the server response and the new state after the action"""
 
-clientParser = argparse.ArgumentParser()
+        if type(data) is GameData.ServerHintData:
+            # an hint has been sent :^O
+            sender = data.sender
+            destination = data.destination
+            _type = data.type
+            value = data.value
+            positions = data.positions
+            return Hint(sender, destination, _type, value, positions)
 
-clientParser.add_argument(
-    "name", type=str, help="The name used by the player", default="s289902"
-)
-clientParser.add_argument("--host", type=str, default=HOST)
-clientParser.add_argument("--port", type=int, default=PORT)
+        elif type(data) is GameData.ServerActionValid:
+            # a discard has been performed :^)
+            # include the drawn card in the created Discard action
+            sender = data.lastPlayer
+            card_index = data.cardHandIndex
+            card_discarded = data.card
+            card_drawn = self.get_new_sender_card(sender, new_state, card_index)
+            return Discard(sender, card_index, card_discarded, card_drawn)
 
-# computerParser = argparse.ArgumentParser(parents=[clientParser])
-# computerParser.add_argument("-n", type=int, help="Number of #computer players to create")
+        elif type(data) is GameData.ServerPlayerMoveOk:
+            # a card has been successfully played :^D
+            sender = data.lastPlayer
+            card_index = data.cardHandIndex
+            real_card = data.card
+            card_drawn = self.get_new_sender_card(sender, new_state, card_index)
+            result = Play.GOOD_MOVE
+            return Play(sender, card_index, real_card, card_drawn, result)
+
+        elif type(data) is GameData.ServerPlayerThunderStrike:
+            # a card has been unsuccessfully played :^@
+            sender = data.lastPlayer
+            card_index = data.cardHandIndex
+            real_card = data.card
+            card_drawn = self.get_new_sender_card(sender, new_state, card_index)
+            result = Play.THUNDERSTRIKE
+            return Play(sender, card_index, real_card, result)
+        return None
+
+    def get_new_sender_card(
+        self, sender: str, new_state: GameData.ServerGameStateData, card_index: int
+    ):
+        if sender == self.player_name:
+            return UnknownCard()
+        for p in new_state.players:
+            if p.name == sender:
+                return p.hand[card_index]
+        raise ValueError("Unable to fetch the new drawn card!!")
