@@ -1,41 +1,13 @@
 from abc import ABC
-from turtle import position
-from unittest import result
 
-from numpy import real
 
 import GameData
-from game import Game, Player
+from game import Player, Card
 from itertools import product
 
 import logging
 
 logging.basicConfig(format="%(message)s", level=logging.DEBUG)
-
-
-class RealCard:
-    """Represent a card whose informations are completely known."""
-
-    def __init__(self, number, color, id):
-        self.number = number
-        self.color = color
-        self.id = id
-        self._str = ".".join([str(self.number), self.color, str(self.id)])
-        # use uniqueness of string representation
-        self._hash = hash(self._str)
-
-    def __hash__(self) -> int:
-        """We need an hash function to work with
-        Sets of cards...
-        I hope this work"""
-        return self._hash
-
-    def __str__(self):
-        return self._str
-
-    def __repr__(self):
-        """useful when printing Set of cards"""
-        return self._str
 
 
 class HanabiAction(ABC):
@@ -54,36 +26,23 @@ class Hint(HanabiAction):
         self.value = value
         self.positions = None
 
-    @staticmethod
-    def from_hint_data(data: GameData.ServerHintData):
-        _from = data.sender
-        to = data.destination
-        _type = data.type
-        value = data.value
-        positions = data.positions
-        return Hint(_from, to, _type, value, positions)
-
 
 class Play(HanabiAction):
     THUNDERSTRIKE = "⚡️"
     GOOD_MOVE = "👍🏻"
 
-    def __init__(self, sender: str, card_index: int, real_card=None, result=None):
+    def __init__(
+        self, sender: str, card_index: int, real_card=None, card_drawn=None, result=None
+    ):
         self.sender = sender
         self.card_index = card_index
-        self.result = result
         self.real_card = real_card
+        self.card_drawn = card_drawn
+        self.result = result
+        return
 
     @staticmethod
-    def from_good_move(data: GameData.ServerPlayerMoveOk):
-        sender = data.sender
-        card_index = data.cardHandIndex
-        real_card = data.card
-        result = Play.GOOD_MOVE
-        return Play(sender, card_index, real_card, result)
-
-    @staticmethod
-    def from_thunderstrike(data: GameData.ServerPlayerThunderStrike):
+    def from_thunder_strike(data: GameData.ServerPlayerThunderStrike):
         sender = data.sender
         card_index = data.cardHandIndex
         real_card = data.card
@@ -94,12 +53,26 @@ class Play(HanabiAction):
 class Discard(HanabiAction):
     def __init__(
         self,
-        sender: Player,
+        sender: str,
         card_index: int,
-        card_discarded: RealCard,
-        card_drawn: RealCard,
+        card_discarded=None,
+        card_drawn=None,
     ):
-        pass
+        self.sender = sender
+        self.card_index = card_index
+        self.card_discarded = card_discarded
+        self.card_drawn = card_drawn
+        return
+
+    def __str__(self):
+        sender = self.sender
+        card_indx = f"Card index: {self.card_index}"
+        card_discarded = f"Card discarded: {self.card_discarded.toString()}"
+        if type(self.card_drawn) is UnknownCard:
+            card_drawn = f"Card drawn: ?"
+        elif type(self.card_drawn) is Card:
+            card_drawn = f"Card drawn: {self.card_drawn.toString()}"
+        return "\n".join([sender, card_indx, card_discarded, card_drawn])
 
 
 class Inference:
@@ -109,7 +82,6 @@ class Inference:
         pass
 
     def add_hint(self, hint: Hint):
-
         pass
 
 
@@ -117,15 +89,18 @@ class UnknownCard:
     """Represent the agent unknown card."""
 
     DECK_DISTR = [(1, 3), (2, 2), (3, 2), (4, 2), (5, 1)]
-    RED = "RED"
-    BLUE = "BLUE"
-    GREEN = "GREEN"
-    WHITE = "WHITE"
-    YELLOW = "YELLOW"
-    COLORS = [RED, GREEN, BLUE, WHITE, YELLOW]
+    RED = "red"
+    YELLOW = "yellow"
+    GREEN = "green"
+    BLUE = "blue"
+    WHITE = "white"
 
-    def __init__(self, other_player_cards: set, table=None, discard_pile=None):
+    COLORS = [RED, YELLOW, GREEN, BLUE, WHITE]
+
+    def __init__(self, other_player_cards=None, table=None, discard_pile=None):
         self.received_hints = list()
+        if other_player_cards is None:
+            other_player_cards = set()
         if table is None:
             table = set()
         if discard_pile is None:
@@ -147,51 +122,14 @@ class UnknownCard:
     @staticmethod
     def all_possible_cards():
         card_set = set()
+        card_id = 0
         for num, copies in UnknownCard.DECK_DISTR:
-            for _id, color in product(range(copies), UnknownCard.COLORS):
-                # print(num, c, col)
-                # TODO: does this id work with server implementation?
-                # use server implementation in case it doesn't
-                card_set.add(RealCard(num, color, _id))
+            for _, color in product(range(copies), UnknownCard.COLORS):
+                # use server side Card class
+                card_set.add(Card(card_id, num, color))
+                card_id += 1
         return card_set
 
-
-# class HanabiAction:
-#     DISCARD = "DISCARD"
-#     HINT = "HINT"
-#     PLAY = "PLAY"
-
-#     HINT_TYPE_ARG = "HINT_TYPE"
-#     HINT_TYPE_VALUE = "VALUE_HINT"
-#     HINT_TYPE_COLOR = "COLOR_HINT"
-#     HINT_VALUE_ARG = "HINT_VALUE"
-#     HINT_SRC_ARG = "SOURCE"
-#     HINT_DEST_ARG = "DEST"
-#     CARD_INDEX_ARG = "CARD_INDEX"
-
-#     def __init__(self, action_type, **kwargs):
-#         """Valid action_params:
-#         - hint: hint_type and hint_value
-#         - discard: card_index
-#         - play: card_index"""
-#         self.action_type = action_type
-#         if action_type == HanabiAction.DISCARD or action_type == HanabiAction.PLAY:
-#             self.card_index = kwargs[HanabiAction.CARD_INDEX_ARG]
-#         elif action_type == HanabiAction.HINT:
-#             self.hint_type = kwargs[HanabiAction.HINT_TYPE_ARG]
-#             self.hint_value = kwargs[HanabiAction.HINT_VALUE_ARG]
-#             self.source = kwargs[HanabiAction.HINT_SRC_ARG]
-#             self.dest = kwargs[HanabiAction.HINT_DEST_ARG]
-#         else:
-#             raise ArgumentTypeError("Invalid action type.")
-#         return
-
-
-#    @staticmethod
-#    def new_hint(_from:Player, to: Player, _type: str, value):
-#        """Return a new HanabiAction of type HINT"""
-#        return HanabiAction(HanabiAction.HINT, HanabiAction.HINT_SRC_ARG=_from,
-#        )
 
 ################### HANABI STATE ###################
 class HanabiState:
@@ -214,7 +152,6 @@ class HanabiState:
                 self.me = p
 
         visible_cards = self.get_visible_cards()
-        print(f"I am {self.me.name}")
         self.inference = Inference(self.n_cards, visible_cards)
         # self.hint_history =
         # <--------------------------------------
@@ -236,37 +173,49 @@ class HanabiState:
     def get_visible_cards(self) -> set:
         """Return the set of RealCard which is currently in the hands
         of the ohter players."""
-        # TODO: check if agent is included in player list and is effectively the firs
         visible_cards = (
             set([c for p in self.players_list[1:] for c in p.hand])
             .union(set(self.discard_pile))
             .union(set(self.table_cards))
         )
         logging.debug(f"{visible_cards}")
+        return visible_cards
 
-    # @staticmethod
-    # def from_server_data(player_name, state: GameData.ServerGameStateData):
-    #     current_player = state.currentPlayer
-    #     players = state.players
-    #     used_storm_tokens = state.usedStormTokens
-    #     used_note_tokens = state.usedNoteTokens
-    #     table_cards = state.tableCards
-    #     discard_pile = state.discardPile
-    #     return
+    def update_state(self, new_state: GameData.ServerGameStateData):
+        self.used_note_tokens = new_state.usedNoteTokens
+        self.used_storm_tokens = new_state.usedStormTokens
+        self.players_list = new_state.players
+        self.table_cards = new_state.tableCards
+        self.discard_pile = new_state.discardPile
+        return
+
+    def get_player(self, player_name: str) -> Player:
+        for p in self.players_list:
+            if p.name == player_name:
+                return p
+        return None
+
+    def on_hint(self, hint: Hint):
+        # TODO: add negative inference from my received hints
+        if hint.to == self.me.name:
+            self.inference.add_hint(hint)
+        else:
+            # TODO: add hint to hint list
+            pass
+
+    def on_play(self, play: Play):
+        logging.debug(f"card drawn: {play.card_drawn}")
+        # TODO: self.inference.add_visible_card(play.card_drawn)
+        pass
+
+    def on_discard(self, discard: Discard):
+        # TODO: update state on discard's result
+        pass
 
     def __str__(self):
-        # players_hands = "\n".join(
-        #    [self.__player_hand(player) for player in self.players_list]
-        # )
         note_tokens = f"{self.used_note_tokens}/8"
         storm_tokens = f"{self.used_storm_tokens}/3"
         return "\n".join([str(self.players_list), note_tokens, storm_tokens])
-
-    # def valid_actions_type(self) -> list:
-    #     playable_actions = [Action.DISCARD, Action.PLAY]
-    #     if self.note_tokens < 8:
-    #         playable_actions.append(Action.HINT)
-    #     return playable_actions
 
     # def valid_hints(self, player_name: str, hint_type=None) -> list:
     #     """Return the valid hints that can be given to player `player_name`
@@ -285,41 +234,3 @@ class HanabiState:
     #         return Counter(hints_for_player)
     #     hints_for_player = filter(hint_filt, hints_for_player)
     #     return Counter(hints_for_player)
-
-    def get_player(self, player_name: str) -> Player:
-        for p in self.players_list:
-            if p.name == player_name:
-                return p
-        return None
-
-    def add_hint(self, hint: Hint):
-        if hint.to == self.me.name:
-            self.inference.add_hint(hint)
-        else:
-            # TODO: add hint to hint list
-            pass
-
-    def add_play(self, play: Play):
-        pass
-
-    def get_next_player_hand(self):
-        for p in self.players_list:
-            pass
-
-    # def
-    # def add_hint(self, hint_data: GameData.ServerHintData):
-    #     self.hint_history.append(hint_data)
-    #     if hint_data.__delattr__() == self.player_name:
-    #         self.received_hints.append(hint_data)
-    #         for p in hint_data.positions:
-    #             self.hand_info[p][hint_data.type] = hint_data.value
-    #     return
-
-    # def add_play(self, play_data: GameData.ServerPlayerMoveOk):
-    #     self.play_history.append(play_data)
-    #     # self.current_player =
-    #     return
-
-    # def add_error(self, error_data: GameData.ServerPlayerThunderStrike):
-    #     self.error_history.append(error_data)
-    #     return
