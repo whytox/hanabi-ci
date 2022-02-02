@@ -1,3 +1,4 @@
+import logging
 from client import Client
 from hanabi_model import HanabiAction, HanabiState, Hint, Discard, Play
 import rules as rl
@@ -17,6 +18,7 @@ class RuleBasedAgent(Client):
         super().__init__(name + RuleBasedAgent.SIGN)
         self.rules = [
             rl.RandomHint,
+            rl.DiscardRandomCard,
             rl.PlayRandomCard,
             # rl.PlayImplicitCard,
             # rl.GivePlayClue,
@@ -47,32 +49,23 @@ class RuleBasedAgent(Client):
     def update_state_with_action(
         self,
         action_response: HanabiAction,
-        new_state: GameData.ServerStartGameData,
+        new_state: GameData.ServerGameStateData,
     ):
         """The action is register inside the agent's state."""
-        # first update client's state
-        print("TEST2")
-        print(new_state)
+
         super().update_state_with_action(action_response, new_state)
-        self.hanabi_state.used_note_tokens = new_state.usedNoteTokens
-        self.hanabi_state.used_storm_tokens = new_state.usedStormTokens
-        # then update agent's one
+
+        self.hanabi_state.update_state(new_state)
+        logging.debug(f"{action_response}")
         if type(action_response) is Hint:
             # an hint has been sent :^O
-            self.hanabi_state.add_hint(action_response)
+            self.hanabi_state.on_hint(action_response)
         elif type(action_response) is Discard:
             # a discard has been performed :^)
-            # TODO: add new card drawn into the discard action
-            discard = Discard(action_response)
-            self.hanabi_state.add_discard(discard)
+            self.hanabi_state.on_discard(action_response)
         elif type(action_response) is Play:
             # a card has been successfully played :^D
-            # TODO: add new card drawn into the play action
-            self.hanabi_state.add_play(action_response)
-        elif type(action_response) is Play:
-            # a card has been unsuccessfully played :^@
-            bad_play = Play(action_response)
-            self.hanabi_state.add_play(action_response)
+            self.hanabi_state.on_play(action_response)
         else:
             raise ValueError(
                 f"Unexpected response received. {action_response}, {action_response.message}"
