@@ -242,7 +242,7 @@ class Client(ABC):
 
         if type(data) is GameData.ServerHintData:
             # an hint has been sent :^O
-            sender = data.sender
+            sender = data.source
             destination = data.destination
             _type = data.type
             value = data.value

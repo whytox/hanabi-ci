@@ -7,6 +7,8 @@ from itertools import product
 
 import logging
 
+from hanabi_view import CARD_COLORS
+
 logging.basicConfig(format="%(message)s", level=logging.DEBUG)
 
 
@@ -24,7 +26,17 @@ class Hint(HanabiAction):
         self.to = to
         self._type = _type
         self.value = value
-        self.positions = None
+        self.positions = positions
+
+    def covers(self, card: Card):
+        """Return wheter the given card is covered by the hint or not."""
+        if self._type == Hint.HINT_TYPE_COL:
+            return card.color == self.value
+        else:
+            return card.value == self.value
+
+    def __repr__(self) -> str:
+        return f"Hint: {self._type} {self.value} in {self.positions}"
 
 
 class Play(HanabiAction):
@@ -79,10 +91,18 @@ class Inference:
     def __init__(self, n_cards, visible_cards: set):
         self.n_cards = n_cards
         self.my_hand = [UnknownCard(visible_cards) for _ in range(self.n_cards)]
-        pass
+        return
 
     def add_hint(self, hint: Hint):
-        pass
+        """Update the knowledge about the agent unknown cards.
+        Also perform a negative inference, i.e. it registers
+        that a certain card has not certain characteristics."""
+        for i, c in enumerate(self.my_hand):
+            if i in hint.positions:  # the cards is covered by the hint
+                c.add_positive_knowledge(hint)
+            else:  # the cards is NOT covered by the hint
+                c.add_negative_knowledge(hint)
+        return
 
 
 class UnknownCard:
@@ -113,11 +133,34 @@ class UnknownCard:
             .difference(table)
             .difference(discard_pile)
         )
+        self.received_hints = list()
+        self.not_received_hints = list()
 
-    def add_hint(self, hint: Hint):
+    def add_positive_knowledge(self, hint: Hint):
+        """This method register that the card is covered by the hint."""
         # TODO: implement hint reception
         # TODO: remove invalid possible cards after the hint
-        pass
+        # remove cards not corresponding to given hint
+        self.received_hints.append(hint)
+        not_possible_cards = set()
+        for c in self.possible_cards:
+            if not hint.covers(c):
+                not_possible_cards.add(c)
+        # remove the set of non possible cards from the set of possible cards
+        self.possible_cards = self.possible_cards.difference(not_possible_cards)
+        print(self.possible_cards)
+        return
+
+    def add_negative_knowledge(self, hint: Hint):
+        """This method register that the card is not covered by the hint."""
+        self.not_received_hints.append(hint)
+        not_possible_cards = set()
+        for c in self.possible_cards:
+            if hint.covers(c):
+                not_possible_cards.add(c)
+        self.possible_cards = self.possible_cards.difference(not_possible_cards)
+        print(self.possible_cards)
+        return
 
     @staticmethod
     def all_possible_cards():
@@ -196,12 +239,13 @@ class HanabiState:
         return None
 
     def on_hint(self, hint: Hint):
-        # TODO: add negative inference from my received hints
         if hint.to == self.me.name:
+            print(f"{self.me.name} received an hint from {hint._from}")
             self.inference.add_hint(hint)
         else:
             # TODO: add hint to hint list
-            pass
+            print(f"{hint._from} sent an hint to {hint.to}")
+        return
 
     def on_play(self, play: Play):
         logging.debug(f"card drawn: {play.card_drawn}")
