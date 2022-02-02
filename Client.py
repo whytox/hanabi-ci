@@ -130,11 +130,11 @@ class Client(ABC):
             if self.current_player == self.player_name:
                 action = self.get_action_to_be_played()  # implemented by agent subclass
                 action_result, new_state = self.__play_action(action)
-                self.update_state_with_action(action_result, new_state)
+                # self.update_state_with_action(action_result, new_state)
             else:
-                action, new_state = self.fetch_action_result()
-                self.update_state_with_action(action, new_state)
-            # TODO: check for game over
+                action_result, new_state = self.fetch_action_result()
+            if action_result is not None:  # possbible for game over
+                self.update_state_with_action(action_result, new_state)
             stdout.flush()
         return
 
