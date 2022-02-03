@@ -17,8 +17,11 @@ class RuleBasedAgent(Client):
     def __init__(self, name):
         super().__init__(name + RuleBasedAgent.SIGN)
         self.rules = [
+            rl.PlaySafeCard,
+            rl.HintPlayableCard,
+            rl.DiscardSafeCard,
             rl.RandomHint,
-            rl.DiscardRandomCard,
+            # rl.DiscardLeftMostUnclued,
             rl.PlayRandomCard,
             # rl.PlayImplicitCard,
             # rl.GivePlayClue,
@@ -29,6 +32,7 @@ class RuleBasedAgent(Client):
 
     def get_action_to_be_played(self) -> HanabiAction:
         for rule in self.rules:
+            print(rule)
             action = rule.match(self.hanabi_state)
             if action is not None:
                 return action

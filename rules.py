@@ -72,6 +72,17 @@ class PlaySafeCard(Rule):
 
 class DiscardSafeCard(Rule):
     def match(state: HanabiState) -> HanabiAction:
+        if state.used_note_tokens == 8:
+            return None
+
+        future_playable_cards = state.get_future_playable_cards()
+        for i, unknown_card in enumerate(state.inference.my_hand):
+            # if the possible cards of the card
+            # are not in the set of future playable cards
+            if not unknown_card.possible_cards & future_playable_cards:
+                print("Can discard card {i} because it's not playable anymore.")
+                return Discard(state.my_name, i)
+            print("Can't dicard card {i} because it's playable.")
         pass
 
 

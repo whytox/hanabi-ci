@@ -194,7 +194,6 @@ class UnknownCard:
                 # use server side Card class
                 card_set.add(Card(card_id, num, color))
                 card_id += 1
-        print(card_set)
         return card_set
 
     NUM_BASE_IDS = {1: 0, 2: 9, 3: 24, 4: 34, 5: 45}
@@ -322,21 +321,31 @@ class HanabiState:
             self.inference.add_visible_card(discard.card_drawn)
         return
 
-    def get_cards_to_be_played(self):
-        """Return a tuple (number, color) for each pile
-        non completely fullfilled with cards,
-        which represents the next card to be played."""
-        to_be_played = list()
-        for color, cards in self.table_cards.items():
-            # next number
-            if not cards:
-                next_number = 1
-            elif len(cards) == 5:
-                continue  # we don't want to play 6s
-            else:
-                next_number = max(cards, key=lambda c: c.value).value + 1
-            to_be_played.append((next_number, color))
-        return to_be_played
+    def get_valid_playable_cards(self):
+        """Return the set of all possible playable cards."""
+        playable_cards = set()
+        for pile_color, cards_list in self.table_cards.items():
+            top_number = len(cards_list)
+            if top_number == 5:
+                continue
+            playable_cards |= UnknownCard.possible_cards_with_info(
+                top_number + 1, pile_color
+            )
+        return playable_cards
+
+    def get_future_playable_cards(self):
+        """Return the set of cards missing to complete the game."""
+        future_playable_cards = set()
+        for pile_color, cards_list in self.table_cards.items():
+            top_number = len(cards_list)
+            if top_number == 5:
+                continue
+            # add the cards from current playable to 5 (included)
+            for required_number in range(top_number + 1, 6):
+                future_playable_cards |= UnknownCard.possible_cards_with_info(
+                    required_number, pile_color
+                )
+        return future_playable_cards
 
     def __str__(self):
         note_tokens = f"{self.used_note_tokens}/8"
