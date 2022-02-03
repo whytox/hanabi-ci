@@ -52,17 +52,16 @@ class DiscardRandomCard(Rule):
 
 
 class DiscardRandomCard(Rule):
-    def match(hanabi_state: HanabiState) -> HanabiAction:
-        card_index = random.choice(range(hanabi_state.n_cards))
-        sender = hanabi_state.me
+    def match(state: HanabiState) -> HanabiAction:
+        if state.used_note_tokens == 8:
+            return None
+        card_index = random.choice(range(state.n_cards))
+        sender = state.me
         return Discard(sender, card_index)
 
 
 class PlaySafeCard(Rule):
     def match(state: HanabiState) -> HanabiAction:
-        if state.used_note_tokens == 8:
-            return None
-
         playable_cards = state.get_valid_playable_cards()
         for i, unknown_card in enumerate(state.inference.my_hand):
             # if the set of possible cards is contained in the set
