@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from game import Game
 from hanabi_model import HanabiState, HanabiAction, Hint, Play, Discard
 from itertools import product
 import random
@@ -59,10 +60,15 @@ class DiscardRandomCard(Rule):
 
 class PlaySafeCard(Rule):
     def match(state: HanabiState) -> HanabiAction:
-        pass
+        if state.used_note_tokens == 8:
+            return None
 
-    def _get_playable_cards(state: HanabiState) -> tuple:
-        pass
+        playable_cards = state.get_valid_playable_cards()
+        for i, unknown_card in enumerate(state.inference.my_hand):
+            # if the set of possible cards is contained in the set
+            # valid playable cards => safe play
+            if unknown_card.possible_cards <= playable_cards:
+                return Play(state.my_name, i)
 
 
 class DiscardSafeCard(Rule):
