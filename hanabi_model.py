@@ -108,6 +108,14 @@ class Inference:
                 c.add_positive_knowledge(hint)
             else:  # the cards is NOT covered by the hint
                 c.add_negative_knowledge(hint)
+
+        # update the chop after adding the hint to the cards
+        if self.chop_index in hint.positions:
+            cards_clues = map(lambda c: c.is_hinted(), self.my_hand)
+            if False in cards_clues:  # if there are unclued cards
+                self.chop_index = list(cards_clues).index(False)  # the first unclued
+            else:
+                self.chop_index = None  # no discardable card
         return
 
     def add_new_unknown_card(self, hanabi_action: HanabiAction):
@@ -184,6 +192,10 @@ class UnknownCard:
         if card in self.possible_cards:
             self.possible_cards.remove(card)
         return
+
+    def is_hinted(self):
+        """Return True if at least an  hint has been received."""
+        return bool(self.received_hints)
 
     @staticmethod
     def all_possible_cards():
