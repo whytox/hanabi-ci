@@ -89,7 +89,7 @@ class Discard(HanabiAction):
 
 
 class Inference:
-    def __init__(self, n_cards, other_players_card: set):
+    def __init__(self, n_cards, other_players_card: set, playable_cards: set()):
 
         self.n_cards = n_cards
         self.visible_cards = other_players_card
@@ -97,6 +97,8 @@ class Inference:
         # print(f"{self.my_hand}")
         # TODO: keep track of players that didn't follow a certain convention
         self.not_trusted_players = set()
+        self.chop_index = 0
+        self.playable_cards = playable_cards
         return
 
     def add_hint(self, hint: Hint):
@@ -116,7 +118,25 @@ class Inference:
                 self.chop_index = list(cards_clues).index(False)  # the first unclued
             else:
                 self.chop_index = None  # no discardable card
+        elif not hint._from in self.not_trusted_players:
+            for c in hint.positions:
+                self.my_hand[c].set_implicit_playable(hint._from, self.playable_cards)
         return
+
+    def wrong_play(self, play: Play):
+        # I'am here cause I played a bad card
+        for card_index, hint_sender in self.implicit_playable:
+            # was it an implicit playable?
+            if play.card_index == card_index:
+                # then put the sender in the list of untrusted player
+                self.not_trusted_players.add(hint_sender)
+        return
+
+    # def check_hint_trust(self, hint: Hint, real_card, playable_cards):
+    #     """Check if the hint is given in accordance to the conventions."""
+    #     if not real_card in playable_cards and not :
+    #         self.not_trusted_players.add(hint._from)
+    #     return
 
     def add_new_unknown_card(self, hanabi_action: HanabiAction):
         """Create a new unknown card after a previous one has
@@ -127,6 +147,10 @@ class Inference:
         # the new card is placed at the end of the player hand
         # so: remove the played card and append an unknown card at the end
         self.my_hand = self.my_hand[:card_index] + self.my_hand[card_index + 1 :]
+        if type(hanabi_action) is Discard:
+            self.add_visible_card(hanabi_action.card_discarded)
+        elif type(hanabi_action) is Play:
+            self.add_visible_card(hanabi_action.real_card)
         self.my_hand.append(UnknownCard(self.visible_cards))
         print(len(self.my_hand))
         # print(f"\tAfter: {self.my_hand[card_index]}")
@@ -162,6 +186,7 @@ class UnknownCard:
             raise ValueError(f"Empty possible cards, but {not_possible_cards} given")
         self.received_hints = list()
         self.not_received_hints = list()
+        self.implicit_possible_cards = dict()  # sender: possible_implicit
 
     # TODO: merge the two following methods in a single one
     def add_positive_knowledge(self, hint: Hint):
@@ -197,6 +222,14 @@ class UnknownCard:
         """Return True if at least an  hint has been received."""
         return bool(self.received_hints)
 
+    def set_implicit_playable(self, hint_sender: str, playable_cards: set):
+        """Update the implicit information about a card.
+        Supposing the hint_sender is a trusted agent,
+        the cards must be in the set of playable cards."""
+        if not hint_sender in self.implicit_possible_cards:
+            self.implicit_possible_cards[hint_sender] = self.possible_cards
+        self.implicit_possible_cards[hint_sender] &= playable_cards
+
     @staticmethod
     def all_possible_cards():
         card_set = set()
@@ -208,7 +241,7 @@ class UnknownCard:
                 card_id += 1
         return card_set
 
-    NUM_BASE_IDS = {1: 0, 2: 9, 3: 24, 4: 34, 5: 45}
+    NUM_BASE_IDS = {1: 0, 2: 15, 3: 25, 4: 35, 5: 45}
 
     @staticmethod
     def possible_cards_with_number(number: int):
@@ -237,6 +270,7 @@ class UnknownCard:
     def possible_cards_with_info(number: int, color: str):
         color_set = UnknownCard.possible_cards_with_color(color)
         number_set = UnknownCard.possible_cards_with_number(number)
+        print(number_set & color_set)
         return number_set & color_set
 
     def __str__(self):
@@ -267,7 +301,9 @@ class HanabiState:
                 self.me = p
 
         visible_cards = self.get_visible_cards()
-        self.inference = Inference(self.n_cards, visible_cards)
+        self.inference = Inference(
+            self.n_cards, visible_cards, self.get_valid_playable_cards()
+        )
         # track the given hint using a list of list
         # the first index is the player (in turn order)
         self.given_hints = [list() for _ in range(len(self.players_list))]
@@ -297,6 +333,7 @@ class HanabiState:
         self.players_list = new_state.players
         self.table_cards = new_state.tableCards
         self.discard_pile = new_state.discardPile
+        self.inference.playable_cards = self.get_valid_playable_cards()
         return
 
     def get_player(self, player_name: str) -> Player:
@@ -336,10 +373,11 @@ class HanabiState:
     def get_valid_playable_cards(self):
         """Return the set of all possible playable cards."""
         playable_cards = set()
+        print(self.table_cards)
         for pile_color, cards_list in self.table_cards.items():
             top_number = len(cards_list)
             if top_number == 5:
-                continue
+                continue  # no playable cards in this pile
             playable_cards |= UnknownCard.possible_cards_with_info(
                 top_number + 1, pile_color
             )
