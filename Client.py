@@ -41,7 +41,7 @@ class Client(ABC):
         connection_request = GameData.ClientPlayerAddData(self.player_name)
         self.__send_request(connection_request)
         response = self.__read_response()
-        if self.__response_of_type(response, GameData.ServerPlayerConnectionOk):
+        if type(response) is GameData.ServerPlayerConnectionOk:
             self.state = ClientState.CONNECTED
             logging.info(
                 f"Connection accepted by the server. Welcome {self.player_name}"
@@ -56,15 +56,6 @@ class Client(ABC):
         response = GameData.GameData.deserialize(data)
         return response
 
-    def __response_of_type(
-        self, response: GameData.ServerToClientData, response_class
-    ) -> bool:
-        """Return True if the given response is of the specified type.
-        Probably useless..."""
-        if type(response) is response_class:
-            return True
-        return False
-
     def __send_request(self, request: GameData.ClientToServerData):
         """Send the specified request to the server."""
         self.socket.send(request.serialize())
@@ -78,13 +69,12 @@ class Client(ABC):
 
     def send_start(self):
         if self.state != ClientState.CONNECTED:
-            print("You must be connected")
-            return
+            raise RuntimeError("You must be connected")
 
         start_request = GameData.ClientPlayerStartRequest(self.player_name)
         self.__send_request(start_request)
         response = self.__read_response()
-        if self.__response_of_type(response, GameData.ServerPlayerStartRequestAccepted):
+        if type(response) is GameData.ServerPlayerStartRequestAccepted:
             self.state = ClientState.LOBBY
             logging.info(
                 msg=f"{self.player_name} - Ready: {response.acceptedStartRequests}/{response.connectedPlayers}"
@@ -95,12 +85,11 @@ class Client(ABC):
 
     def wait_start(self):
         if self.state != ClientState.LOBBY:
-            print("You have to be in the lobby")
-            return
+            raise RuntimeError("You have to be in the lobby")
         # read until it's a ServerStart
         while self.state != ClientState.IN_GAME:
             response = self.__read_response()
-            if self.__response_of_type(response, GameData.ServerStartGameData):
+            if type(response) is GameData.ServerStartGameData:
                 ready_request = GameData.ClientPlayerReadyData(self.player_name)
                 self.__send_request(ready_request)
                 self.state = ClientState.IN_GAME
@@ -116,9 +105,7 @@ class Client(ABC):
 
     @abstractmethod
     def _init_game_state(self, state: GameData.ServerGameStateData):
-        print("client state init")
         self.current_player = state.currentPlayer
-        # self.player_order = state.players
         return
 
     def run(self):
@@ -126,11 +113,9 @@ class Client(ABC):
             return
         s = self.socket
         while self.state == ClientState.IN_GAME:
-            print(self.player_name, self.current_player)
             if self.current_player == self.player_name:
                 action = self.get_action_to_be_played()  # implemented by agent subclass
                 action_result, new_state = self.__play_action(action)
-                # self.update_state_with_action(action_result, new_state)
             else:
                 action_result, new_state = self.fetch_action_result()
             if action_result is not None:  # possbible for game over
@@ -152,7 +137,7 @@ class Client(ABC):
         elif type(action) is Hint:
             self.__give_hint(action)
         else:
-            raise TypeError("Inappropriate action type.")
+            raise TypeError(f"Inappropriate action type: {action}")
         # check server response:
         action_result, new_state = self.fetch_action_result()
         return action_result, new_state
@@ -199,16 +184,16 @@ class Client(ABC):
         """
         response = self.__read_response()
 
-        if self.__response_of_type(response, GameData.ServerActionInvalid):
+        if type(response) is GameData.ServerActionInvalid:
             raise ValueError(f"ActionInvalid received: {response.message}")
-        elif self.__response_of_type(response, GameData.ServerInvalidDataReceived):
+        elif type(response) is GameData.ServerInvalidDataReceived:
             raise ValueError(f"InvalidData received: {response.data}")
         elif type(response) is GameData.ServerGameOver:
             logging.info("The game is over.")
             self.state = ClientState.GAME_OVER
             return None, None
 
-        # check new state to get info about the new drawn cards
+        logging.debug(response)
         new_state = self.fetch_state()
         played_action = self.build_action_from_server_response(response, new_state)
         return (played_action, new_state)
@@ -217,13 +202,13 @@ class Client(ABC):
         """Send a ClientGetGameStateRequest and return the
         received ServerGameStateData."""
         if self.state != ClientState.IN_GAME:
-            print("You must be in game")
-            return
+            raise RuntimeError("You must be in game")
         self.__send_status()
         response = self.__read_response()
-        if self.__response_of_type(response, GameData.ServerGameStateData):
-            return response
-        raise ValueError("Invalid state received.")
+        while not type(response) is GameData.ServerGameStateData:
+            response = self.__read_response()
+        return response
+        # raise ValueError(f"Invalid state received. {response} received.")
 
     @abstractmethod
     def update_state_with_action(
@@ -275,7 +260,8 @@ class Client(ABC):
             card_drawn = self.get_new_sender_card(sender, new_state, card_index)
             result = Play.THUNDERSTRIKE
             return Play(sender, card_index, real_card, card_drawn, result)
-        return None
+        else:
+            raise ValueError("Invalid action response: {data}")
 
     def get_new_sender_card(
         self, sender: str, new_state: GameData.ServerGameStateData, card_index: int
@@ -284,5 +270,5 @@ class Client(ABC):
             return UnknownCard()
         for p in new_state.players:
             if p.name == sender:
-                return p.hand[card_index]
+                return p.hand[-1]  # drawn card are appended to the player hand
         raise ValueError("Unable to fetch the new drawn card!!")

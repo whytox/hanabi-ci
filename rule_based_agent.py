@@ -18,15 +18,13 @@ class RuleBasedAgent(Client):
         super().__init__(name + RuleBasedAgent.SIGN)
         self.rules = [
             rl.PlaySafeCard,
+            rl.PlayAlmostSafeCard,
             rl.HintPlayableCard,
-            rl.DiscardSafeCard,
-            rl.RandomHint,
-            # rl.DiscardLeftMostUnclued,
-            rl.PlayRandomCard,
-            # rl.PlayImplicitCard,
-            # rl.GivePlayClue,
-            # rl.GiveSaveClue,
-            # rl.DiscardChopCard,
+            rl.DiscardUselessCard,
+            rl.HintUsefulChop,
+            rl.DiscardChop,
+            rl.HintRandomCard,
+            rl.PlayLessRiskyCard,
         ]
         self.hanabi_state = None
 
@@ -36,13 +34,10 @@ class RuleBasedAgent(Client):
             action = rule.match(self.hanabi_state)
             if action is not None:
                 return action
-        # no matching rule xD
-        # go random?
         return
 
     def _init_game_state(self, state: GameData.ServerStartGameData):
         super()._init_game_state(state)
-        print("agent state init")
         if self.hanabi_state is not None:
             return
 
