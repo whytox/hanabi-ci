@@ -1,4 +1,5 @@
 from abc import ABC
+from dis import dis
 import GameData
 from game import Player, Card
 from itertools import product
@@ -89,8 +90,14 @@ class Discard(HanabiAction):
 
 
 class Inference:
-    def __init__(self, n_cards, other_players_card: set, playable_cards: set()):
-
+    def __init__(
+        self,
+        state,
+        n_cards,
+        other_players_card: set,
+        playable_cards: set(),
+    ):
+        self.state = state
         self.n_cards = n_cards
         self.visible_cards = other_players_card
         self.my_hand = [UnknownCard(self.visible_cards) for _ in range(self.n_cards)]
@@ -113,9 +120,9 @@ class Inference:
 
         # update the chop after adding the hint to the cards
         if self.chop_index in hint.positions:
-            cards_clues = map(lambda c: c.is_hinted(), self.my_hand)
+            cards_clues = list(map(lambda c: c.is_hinted(), self.my_hand))
             if False in cards_clues:  # if there are unclued cards
-                self.chop_index = list(cards_clues).index(False)  # the first unclued
+                self.chop_index = cards_clues.index(False)  # the first unclued
             else:
                 self.chop_index = None  # no discardable card
         elif not hint._from in self.not_trusted_players:
@@ -152,7 +159,7 @@ class Inference:
         elif type(hanabi_action) is Play:
             self.add_visible_card(hanabi_action.real_card)
         self.my_hand.append(UnknownCard(self.visible_cards))
-        print(len(self.my_hand))
+        # print(len(self.my_hand))
         # print(f"\tAfter: {self.my_hand[card_index]}")
 
     def add_visible_card(self, card: Card):
@@ -227,8 +234,11 @@ class UnknownCard:
         Supposing the hint_sender is a trusted agent,
         the cards must be in the set of playable cards."""
         if not hint_sender in self.implicit_possible_cards:
-            self.implicit_possible_cards[hint_sender] = self.possible_cards
-        self.implicit_possible_cards[hint_sender] &= playable_cards
+            self.implicit_possible_cards[hint_sender] = (
+                self.possible_cards & playable_cards
+            )
+        # self.implicit_possible_cards[hint_sender] &= playable_cards
+        print("implicit:", self.implicit_possible_cards)
 
     @staticmethod
     def all_possible_cards():
@@ -270,7 +280,6 @@ class UnknownCard:
     def possible_cards_with_info(number: int, color: str):
         color_set = UnknownCard.possible_cards_with_color(color)
         number_set = UnknownCard.possible_cards_with_number(number)
-        print(number_set & color_set)
         return number_set & color_set
 
     def __str__(self):
@@ -291,6 +300,7 @@ class HanabiState:
         self.used_storm_tokens = state_data.usedStormTokens
         self.table_cards = state_data.tableCards
         self.discard_pile = state_data.discardPile
+        self.other_players_hints = {player.name: set() for player in self.players_list}
 
         self.n_cards = 5 if len(self.players_list) <= 3 else 4
         self.my_name = player
@@ -302,7 +312,7 @@ class HanabiState:
 
         visible_cards = self.get_visible_cards()
         self.inference = Inference(
-            self.n_cards, visible_cards, self.get_valid_playable_cards()
+            self, self.n_cards, visible_cards, self.get_valid_playable_cards()
         )
         # track the given hint using a list of list
         # the first index is the player (in turn order)
@@ -349,17 +359,18 @@ class HanabiState:
         else:
             # TODO: add hint to hint list
             logging.debug(f"{hint._from} sent an hint to {hint.to}")
+            receiver_hand = self.get_player(hint.to).hand
+            for p in hint.positions:
+                self.other_players_hints[hint.to].add(receiver_hand[p])
         return
 
     def on_play(self, play: Play):
         logging.debug(f"card drawn: {play.card_drawn}")
 
         if play.sender == self.my_name:
-            print(
-                f"-- adding a new unknown card after a play in position {play.card_index}"
-            )
             self.inference.add_new_unknown_card(play)
         else:
+            self.other_players_hints[play.sender].remove(play.real_card)
             self.inference.add_visible_card(play.card_drawn)
         return
 
@@ -367,13 +378,14 @@ class HanabiState:
         if discard.sender == self.my_name:
             self.inference.add_new_unknown_card(discard)
         else:
+            if discard.card_discarded in self.other_players_hints[discard.sender]:
+                self.other_players_hints[discard.sender].remove(discard.card_discarded)
             self.inference.add_visible_card(discard.card_drawn)
         return
 
     def get_valid_playable_cards(self):
         """Return the set of all possible playable cards."""
         playable_cards = set()
-        print(self.table_cards)
         for pile_color, cards_list in self.table_cards.items():
             top_number = len(cards_list)
             if top_number == 5:
@@ -420,3 +432,6 @@ class HanabiState:
             return Counter(hints_for_player)
         hints_for_player = filter(hint_filt, hints_for_player)
         return Counter(hints_for_player)
+
+    def get_clued_cards(self, player: str) -> set:
+        return self.other_players_hints[player]
