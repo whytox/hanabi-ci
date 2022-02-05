@@ -22,8 +22,13 @@ class RuleBasedAgent(Client):
             rl.HintPlayableCard,
             rl.DiscardUselessCard,
             rl.HintUsefulChop,
+            rl.HintMostUncluedCards,
+            rl.HintMostCards,
+            rl.HintUselessCard,
+            rl.DiscardLessUsefulCard,
             rl.DiscardChop,
             rl.HintRandomCard,
+            rl.DiscardRandomCard,
             rl.PlayLessRiskyCard,
         ]
         self.hanabi_state = None

@@ -102,8 +102,6 @@ class Inference:
         self.n_cards = n_cards
         self.visible_cards = other_players_card
         self.my_hand = [UnknownCard(self.visible_cards) for _ in range(self.n_cards)]
-        # print(f"{self.my_hand}")
-        # TODO: keep track of players that didn't follow a certain convention
         self.not_trusted_players = set()
         self.chop_index = 0
         self.playable_cards = playable_cards
@@ -126,9 +124,6 @@ class Inference:
                 self.chop_index = cards_clues.index(False)  # the first unclued
             else:
                 self.chop_index = None  # no discardable card
-        elif not hint._from in self.not_trusted_players:
-            for c in hint.positions:
-                self.my_hand[c].set_implicit_playable(hint._from, self.playable_cards)
         return
 
     def wrong_play(self, play: Play):
@@ -150,8 +145,6 @@ class Inference:
         """Create a new unknown card after a previous one has
         been played or discarded."""
         card_index = hanabi_action.card_index
-        # print(card_index)
-        # print(f"\tBefore: {self.my_hand[card_index]}")
         # the new card is placed at the end of the player hand
         # so: remove the played card and append an unknown card at the end
         self.my_hand = self.my_hand[:card_index] + self.my_hand[card_index + 1 :]
@@ -160,8 +153,7 @@ class Inference:
         elif type(hanabi_action) is Play:
             self.add_visible_card(hanabi_action.real_card)
         self.my_hand.append(UnknownCard(self.visible_cards))
-        # print(len(self.my_hand))
-        # print(f"\tAfter: {self.my_hand[card_index]}")
+        return
 
     def add_visible_card(self, card: Card):
         """Add a new visible card to the set of visible cards."""
@@ -207,7 +199,6 @@ class UnknownCard:
                 not_possible_cards.add(c)
         # remove the set of non possible cards from the set of possible cards
         self.possible_cards = self.possible_cards.difference(not_possible_cards)
-        # print("after hint registration possible cards are:", self.possible_cards)
         return
 
     def add_negative_knowledge(self, hint: Hint):
@@ -218,7 +209,6 @@ class UnknownCard:
             if hint.covers(c):
                 not_possible_cards.add(c)
         self.possible_cards = self.possible_cards.difference(not_possible_cards)
-        # print("after NON hint registration possible cards are:", self.possible_cards)
         return
 
     def remove_possible(self, card: Card):
@@ -229,17 +219,6 @@ class UnknownCard:
     def is_hinted(self):
         """Return True if at least an  hint has been received."""
         return bool(self.received_hints)
-
-    def set_implicit_playable(self, hint_sender: str, playable_cards: set):
-        """Update the implicit information about a card.
-        Supposing the hint_sender is a trusted agent,
-        the cards must be in the set of playable cards."""
-        if not hint_sender in self.implicit_possible_cards:
-            self.implicit_possible_cards[hint_sender] = (
-                self.possible_cards & playable_cards
-            )
-        # self.implicit_possible_cards[hint_sender] &= playable_cards
-        print("implicit:", self.implicit_possible_cards)
 
     @staticmethod
     def all_possible_cards():
@@ -296,12 +275,16 @@ class HanabiState:
 
         self.current_player = state_data.currentPlayer
         self.players_list = state_data.players
-        logging.debug(f"Players names: {[p.name for p in self.players_list]}")
         self.used_note_tokens = state_data.usedNoteTokens
         self.used_storm_tokens = state_data.usedStormTokens
         self.table_cards = state_data.tableCards
         self.discard_pile = set(state_data.discardPile)
+
+        # the first index is the player (in turn order)
         self.other_players_hints = {player.name: set() for player in self.players_list}
+        # tracks the info received by clued players' cards
+        # dict: Cards: (number, color)
+        self.cards_known_infos = dict()
 
         self.n_cards = 5 if len(self.players_list) <= 3 else 4
         self.my_name = player
@@ -315,9 +298,7 @@ class HanabiState:
         self.inference = Inference(
             self, self.n_cards, visible_cards, self.get_valid_playable_cards()
         )
-        # track the given hint using a list of list
-        # the first index is the player (in turn order)
-        self.given_hints = [list() for _ in range(len(self.players_list))]
+
         return
 
     def get_my_turn(self):
@@ -364,7 +345,7 @@ class HanabiState:
                 try:
                     self.other_players_hints[hint.to].add(receiver_hand[p])
                 except IndexError:
-                    pass  #
+                    pass  # that hurts
         return
 
     def on_play(self, play: Play):
@@ -431,13 +412,18 @@ class HanabiState:
         player_data = [f"{p.name}: {p.hand}" for p in self.players_list]
         return "\n".join([*player_data, note_tokens, storm_tokens])
 
-    def valid_hints(self, player_name: str, hint_type=None) -> list:
+    def get_valid_hints(
+        self, player_name: str, hint_type=None, remove_clued=False
+    ) -> list:
         """Return the valid hints that can be given to player `player_name`
-        as a tuple (type, value, n_cards).
-        TODO: add remove_known param to filter out already known hints."""
+        as a tuple (value, n_cards).
+        If the value is numeric => number hint
+        else if string => color hint"""
         hints_for_player = list()
         player = self.get_player(player_name)
         for i, c in enumerate(player.hand):
+            if remove_clued and c in self.other_players_hints[player_name]:
+                continue
             card_info = [c.value, c.color]  # no card index??
             hints_for_player.extend(card_info)
         if hint_type == "color":

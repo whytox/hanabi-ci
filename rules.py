@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from logging.config import valid_ident
+from os import remove
 from game import Game
 from hanabi_model import HanabiState, HanabiAction, Hint, Play, Discard, UnknownCard
 from itertools import product
@@ -100,7 +102,6 @@ class HintPlayableCard(Rule):
             hintable_cards = player_cards & playable_cards
             print(f"hintable: by {state.my_name.upper()}:", hintable_cards, sep="\t")
             for card in hintable_cards:
-                # TODO: only clue unclued cards
                 if card in state.get_clued_cards(player.name):
                     continue
                 same_color_cards = UnknownCard.possible_cards_with_color(card.color)
@@ -133,7 +134,7 @@ class HintUsefulChop(Rule):
         )
         for player in players:
             chop_card = player.hand[0]
-            if chop_card.value == 2:
+            if chop_card.value == 2:  # twos are generally considered useful
                 Hint(state.my_name, player.name, Hint.HINT_TYPE_COL, chop_card.value)
             elif chop_card.value == 5:
                 Hint(state.my_name, player.name, Hint.HINT_TYPE_VAL, chop_card.value)
@@ -152,34 +153,14 @@ class DiscardChop(Rule):
         return None
 
 
-class PlaySafeImplicitCard(Rule):
-    def match(state: HanabiState) -> HanabiAction:
-        playable_cards = state.get_valid_playable_cards()
-        for card_index, unknown_card in enumerate(state.inference.my_hand):
-            print("IMPLICIT:", unknown_card.implicit_possible_cards)
-            for (
-                hint_sender,
-                implicit_cards,
-            ) in unknown_card.implicit_possible_cards.items():
-
-                if (
-                    not hint_sender in state.inference.not_trusted_players
-                    and implicit_cards <= playable_cards
-                ) and implicit_cards:
-                    print("playing a card supposing it is playable")
-                    return Play(state.my_name, card_index)
-                else:
-                    print(f"implicit cards {implicit_cards} are not {playable_cards}")
-
-        return None
-
-
 class PlayAlmostSafeCard(Rule):
-    PLAY_TRESHOLD = 0.7
+    PLAY_TRESHOLD = 0.6
 
     def match(state: HanabiState) -> HanabiAction:
         """Play a card that has a probability of at least PLAY_THRESHOLD
         of being playable."""
+        if state.used_storm_tokens > 1:
+            return None
         playable_cards = state.get_valid_playable_cards()
 
         for i, unknown_card in enumerate(state.inference.my_hand):
@@ -203,5 +184,107 @@ class PlayLessRiskyCard(Rule):
                 unknown_card.possible_cards
             )
             card_risk.append((i, risk))
-        best_card = sorted(card_risk, key=lambda c: c[1])[0][0]
+        print(card_risk)
+        best_card = max(card_risk, key=lambda c: c[1])[0]
         return Play(state.my_name, best_card)
+
+
+class HintMostUncluedCards(Rule):
+    def match(state: HanabiState) -> HanabiAction:
+        if state.used_note_tokens == 8:
+            return None
+
+        state.get_relative_player_order()
+        best_hint = None
+        max_cards_addressed = 0
+        for player in state.players_list:
+            valid_hints = state.get_valid_hints(player.name, remove_clued=True)
+            #       most common element is the frirst----v  v---- second element of most common element
+            if not valid_hints:
+                continue
+            most_common_info = valid_hints.most_common(1)[0]  # so ugly I know
+            num_cards_addressed = most_common_info[1]
+            if num_cards_addressed > max_cards_addressed:
+                hint_type = (
+                    Hint.HINT_TYPE_COL
+                    if type(most_common_info[0]) is str
+                    else Hint.HINT_TYPE_VAL
+                )
+                hint_value = most_common_info[0]
+                best_hint = Hint(state.my_name, player.name, hint_type, hint_value)
+                max_cards_addressed = num_cards_addressed
+        if best_hint is not None:
+            logging.debug(
+                f"Best hint addresses {max_cards_addressed} of {best_hint.to}"
+            )
+        return best_hint
+
+
+class HintMostCards(Rule):  # so ugly I know
+    def match(state: HanabiState) -> HanabiAction:
+        if state.used_note_tokens == 8:
+            return None
+
+        state.get_relative_player_order()
+        best_hint = None
+        max_cards_addressed = 0
+        for player in state.players_list:
+            valid_hints = state.get_valid_hints(player.name, remove_clued=False)
+            #       most common element is the frirst----v  v---- second element of most common element
+            if not valid_hints:
+                continue
+            most_common_info = valid_hints.most_common(1)[0]
+            num_cards_addressed = most_common_info[1]
+            if num_cards_addressed > max_cards_addressed:
+                hint_type = (
+                    Hint.HINT_TYPE_COL
+                    if type(most_common_info[0]) is str
+                    else Hint.HINT_TYPE_VAL
+                )
+                hint_value = most_common_info[0]
+                best_hint = Hint(state.my_name, player.name, hint_type, hint_value)
+                max_cards_addressed = num_cards_addressed
+        if best_hint is not None:
+            logging.debug(
+                f"Best hint addresses {max_cards_addressed} of {best_hint.to}"
+            )
+        return best_hint
+
+
+class HintUselessCard(Rule):
+    def match(state: HanabiState) -> HanabiAction:
+        if state.used_note_tokens == 8:
+            return None
+
+        still_useful_card = state.get_future_playable_cards()
+        for player in state.get_relative_player_order():
+            for card in player.hand:
+                if (
+                    not card in still_useful_card
+                    and not card in state.other_players_hints[player.name]
+                ):
+                    return Hint(
+                        state.my_name, player.name, Hint.HINT_TYPE_COL, card.color
+                    )
+        return None
+
+
+class DiscardLessUsefulCard(Rule):
+    def match(state: HanabiState) -> Discard:
+        if state.used_note_tokens == 0:
+            return None
+
+        future_useful_cards = state.get_future_playable_cards()
+        cards_usefulness = list()
+        for i, unknown_card in enumerate(state.inference.my_hand):
+            usefulness = len(unknown_card.possible_cards & future_useful_cards) / len(
+                unknown_card.possible_cards
+            )
+            cards_usefulness.append((i, usefulness))
+
+        most_useless_card_index = min(cards_usefulness, key=lambda c: c[1])[0]
+        useleness = min(cards_usefulness, key=lambda c: c[1])[1]
+        logging.debug(
+            f"most useless card is {most_useless_card_index} with uselesness of {useleness}"
+        )
+        return Discard(state.my_name, most_useless_card_index)
