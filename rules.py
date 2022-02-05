@@ -194,12 +194,14 @@ class PlayAlmostSafeCard(Rule):
             logging.debug(msg=f"card {i} is not enough safe: {p}")
 
 
-class HintTempo(Rule):
+class PlayLessRiskyCard(Rule):
     def match(state: HanabiState) -> HanabiAction:
-        """Conditions:
-        - no playable
-        - no hintable playable
-        - can't discard
-        => don't play but give an hint"""
-        if state.used_note_tokens == 8:
-            return None
+        card_risk = list()
+        playable_cards = state.get_valid_playable_cards()
+        for i, unknown_card in enumerate(state.inference.my_hand):
+            risk = len(playable_cards & unknown_card.possible_cards) / len(
+                unknown_card.possible_cards
+            )
+            card_risk.append((i, risk))
+        best_card = sorted(card_risk, key=lambda c: c[1])[0][0]
+        return Play(state.my_name, best_card)
