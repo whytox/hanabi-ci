@@ -1,5 +1,6 @@
 from abc import ABC
 from dis import dis
+from typing_extensions import Self
 import GameData
 from game import Player, Card
 from itertools import product
@@ -299,7 +300,7 @@ class HanabiState:
         self.used_note_tokens = state_data.usedNoteTokens
         self.used_storm_tokens = state_data.usedStormTokens
         self.table_cards = state_data.tableCards
-        self.discard_pile = state_data.discardPile
+        self.discard_pile = set(state_data.discardPile)
         self.other_players_hints = {player.name: set() for player in self.players_list}
 
         self.n_cards = 5 if len(self.players_list) <= 3 else 4
@@ -342,7 +343,7 @@ class HanabiState:
         self.used_storm_tokens = new_state.usedStormTokens
         self.players_list = new_state.players
         self.table_cards = new_state.tableCards
-        self.discard_pile = new_state.discardPile
+        self.discard_pile = set(new_state.discardPile)
         self.inference.playable_cards = self.get_valid_playable_cards()
         return
 
@@ -357,11 +358,13 @@ class HanabiState:
             logging.debug(f"{self.me.name} received an hint from {hint._from}")
             self.inference.add_hint(hint)
         else:
-            # TODO: add hint to hint list
             logging.debug(f"{hint._from} sent an hint to {hint.to}")
             receiver_hand = self.get_player(hint.to).hand
             for p in hint.positions:
-                self.other_players_hints[hint.to].add(receiver_hand[p])
+                try:
+                    self.other_players_hints[hint.to].add(receiver_hand[p])
+                except IndexError:
+                    pass  #
         return
 
     def on_play(self, play: Play):
@@ -370,7 +373,8 @@ class HanabiState:
         if play.sender == self.my_name:
             self.inference.add_new_unknown_card(play)
         else:
-            self.other_players_hints[play.sender].remove(play.real_card)
+            if play.real_card in self.other_players_hints[play.sender]:
+                self.other_players_hints[play.sender].remove(play.real_card)
             self.inference.add_visible_card(play.card_drawn)
         return
 
@@ -390,22 +394,34 @@ class HanabiState:
             top_number = len(cards_list)
             if top_number == 5:
                 continue  # no playable cards in this pile
-            playable_cards |= UnknownCard.possible_cards_with_info(
-                top_number + 1, pile_color
+            playable_cards |= (
+                UnknownCard.possible_cards_with_info(top_number + 1, pile_color)
+                - self.discard_pile
             )
         return playable_cards
 
     def get_future_playable_cards(self):
         """Return the set of cards missing to complete the game."""
-        future_playable_cards = set()
+        future_playable_cards = self.get_valid_playable_cards()
         for pile_color, cards_list in self.table_cards.items():
             top_number = len(cards_list)
             if top_number == 5:
                 continue
             # add the cards from current playable to 5 (included)
             for required_number in range(top_number + 1, 6):
-                future_playable_cards |= UnknownCard.possible_cards_with_info(
+                required_cards = UnknownCard.possible_cards_with_info(
                     required_number, pile_color
+                )
+                # if required cards have been discarded...
+                if required_cards <= self.discard_pile:
+                    # the folliwing ones are not playable anymore
+                    # Ex: red 2 on top but all red 3s have been discarded
+                    #  => red 4s and 5s are not playable neither
+                    break
+                # otherwise include only cards that are not in the discard pile
+                future_playable_cards |= (
+                    UnknownCard.possible_cards_with_info(required_number, pile_color)
+                    - self.discard_pile
                 )
         return future_playable_cards
 
@@ -435,3 +451,6 @@ class HanabiState:
 
     def get_clued_cards(self, player: str) -> set:
         return self.other_players_hints[player]
+
+    def get_relative_player_order(self) -> list:
+        return self.players_list[self.my_turn + 1 :] + self.players_list[: self.my_turn]
